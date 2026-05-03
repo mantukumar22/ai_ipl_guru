@@ -60,8 +60,10 @@ export default function GameInterface() {
       setSessionId(docRef.id);
       
       const firstStep = await processGameStep([]);
-      setCurrentQuestion(firstStep.question || 'Is the player an Indian?');
-      setTopSuspects(firstStep.topSuspects);
+      
+      // Use fallback question if first step fails
+      setCurrentQuestion(firstStep?.question || 'Is the player a specialist batsman?');
+      setTopSuspects(Array.isArray(firstStep?.topSuspects) ? firstStep.topSuspects : []);
       setHistory([]);
       setStatus('playing');
     } catch (err) {
@@ -82,34 +84,37 @@ export default function GameInterface() {
     setLoading(true);
     
     try {
-      // Use background sync for Firestore to prevent blocking logic on network spikes
-      updateDoc(doc(db, 'sessions', sessionId), {
-        questions: newHistory,
-        updatedAt: serverTimestamp(),
-      }).catch(e => {
-        console.error("Session sync non-critical failure:", e);
-        setGameError("Network unstable, sync delayed...");
-      });
+      // Use background sync for Firestore
+      if (sessionId) {
+        updateDoc(doc(db, 'sessions', sessionId), {
+          questions: newHistory,
+          updatedAt: serverTimestamp(),
+        }).catch(e => {
+          console.error("Non-critical sync failure:", e);
+          setGameError("Network unstable, sync delayed...");
+        });
+      }
 
       const nextStep = await processGameStep(newHistory);
       
-      if (nextStep.error) {
-        setGameError("The Brain is stuttering... attempting to recover.");
+      if (nextStep?.error === 'AI_STABILITY_TRIGGERED') {
+        setGameError("Neural link unstable - using heuristic estimation.");
+      } else if (nextStep?.error) {
+        setGameError("Engine anomaly detected. Recalibrating...");
       }
 
-      setTopSuspects(nextStep.topSuspects || []);
-      setConfidence(nextStep.confidence || 0);
+      setTopSuspects(Array.isArray(nextStep?.topSuspects) ? nextStep.topSuspects : []);
+      setConfidence(nextStep?.confidence ?? 10);
       
-      if (nextStep.isFinal && nextStep.guess) {
+      if (nextStep?.isFinal && nextStep?.guess) {
         setGuess(nextStep.guess);
         setStatus('guessing');
       } else {
-        setCurrentQuestion(nextStep.question || 'Is the player a specialist bowler?');
+        setCurrentQuestion(nextStep?.question || 'Is the player currently active in the IPL?');
       }
     } catch (err) {
       console.error("Deduction lifecycle crash:", err);
-      setGameError("Session sync failure. Retrying...");
-      // Self-recovery: try to keep the game alive
+      setGameError("System sync failure. Attempting to keep state alive...");
       setTimeout(() => setLoading(false), 1500);
       return;
     } finally {
@@ -466,10 +471,12 @@ export default function GameInterface() {
 
       {/* Bottom Telemetry Footer */}
       <footer className="h-12 px-4 md:px-8 flex items-center justify-between bg-slate-950 border-t border-white/5 flex-shrink-0 z-20">
-        <div className="flex gap-4 md:gap-6">
+            <div className="flex gap-4 md:gap-6">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-            <span className="text-[8px] md:text-[10px] text-slate-400 font-mono tracking-widest uppercase truncate max-w-[100px] md:max-w-none">Gemini-3-Flash Engine Active</span>
+            <div className={`w-2 h-2 ${gameError ? 'bg-amber-500' : 'bg-emerald-500'} rounded-full animate-pulse`} />
+            <span className="text-[8px] md:text-[10px] text-slate-400 font-mono tracking-widest uppercase truncate max-w-[100px] md:max-w-none">
+              {gameError ? 'Telemetry Degraded' : 'Deduction Core Online'}
+            </span>
           </div>
           <div className="hidden sm:flex items-center gap-2 border-l border-white/10 pl-4 md:pl-6">
             <span className="text-[10px] text-slate-500 uppercase tracking-tighter">Stack:</span>
