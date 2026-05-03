@@ -1,0 +1,46 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return false; } // No admin feature requested
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // Session Validation
+    function isValidSession(data) {
+      return data.status in ["active", "guessing", "finished", "failed"]
+        && (data.get('confidence', 0) is number && data.get('confidence', 0) >= 0 && data.get('confidence', 0) <= 100)
+        && data.createdAt is timestamp
+        && (data.get('questions', []) is list && data.get('questions', []).size() <= 50);
+    }
+
+    match /sessions/{sessionId} {
+      allow get: if true; // Public access for now to allow simple testing, can be hardened with userId
+      allow list: if false; // Prevent scraping all sessions
+      
+      allow create: if isValidId(sessionId)
+        && isValidSession(incoming())
+        && incoming().createdAt == request.time;
+      
+      allow update: if isValidSession(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasAny(['questions', 'status', 'finalGuess', 'confidence', 'updatedAt'])
+        && incoming().updatedAt == request.time;
+    }
+
+    match /feedback/{feedbackId} {
+      allow create: if isValidId(feedbackId)
+        && incoming().createdAt == request.time
+        && incoming().actualPlayer is string && incoming().actualPlayer.size() <= 100;
+    }
+  }
+}

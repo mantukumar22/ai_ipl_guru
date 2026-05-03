@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "GameSession": {
+      "title": "Game Session",
+      "description": "Represents a single Akinator-style game session.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "question": { "type": "string" },
+              "answer": { "type": "string" }
+            }
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "guessing", "finished", "failed"]
+        },
+        "finalGuess": { "type": "string" },
+        "confidence": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["status", "createdAt"]
+    },
+    "PlayerFeedback": {
+      "title": "Player Feedback",
+      "description": "Stored when the AI guesses incorrectly to help it learn.",
+      "type": "object",
+      "properties": {
+        "guessedPlayer": { "type": "string" },
+        "actualPlayer": { "type": "string" },
+        "questionHistory": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/sessions/{sessionId}": {
+      "schema": "GameSession",
+      "description": "Active and past game sessions."
+    },
+    "/feedback/{feedbackId}": {
+      "schema": "PlayerFeedback",
+      "description": "Feedback from incorrect guesses."
+    }
+  }
+}
