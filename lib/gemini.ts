@@ -15,7 +15,8 @@ function getGenAI() {
 }
 
 export interface GameStep {
-  question?: string;
+  technicalQuestion?: string; // The raw attribute-based question
+  question?: string;          // The narrative/mystical question
   guess?: string | null;
   confidence: number;
   isFinal: boolean;
@@ -28,13 +29,11 @@ export interface GameStep {
  * Main entry point for game logic.
  * Combines local heuristic filtering with surgical AI narrative injections.
  */
-export async function processGameStep(history: { question: string; answer: string }[], retryCount = 0): Promise<GameStep> {
+export async function processGameStep(history: { technicalQuestion?: string; question: string; answer: string }[], retryCount = 0): Promise<GameStep> {
   // 1. Core Logic: Always calculate the technical state locally first.
-  // This ensures accuracy and zero-crashes even if the API is dead.
   const localResult = getHeuristicGameStep(history);
   
   // 2. Intelligence Strategy: Decide if this turn warrants a precious AI call.
-  // We only call the AI for the Start, Mid-pivot, and the Final guess.
   const turnCount = history.length;
   const isStart = turnCount === 0;
   const isMidWay = turnCount === 6;
@@ -44,7 +43,11 @@ export async function processGameStep(history: { question: string; answer: strin
 
   if (!shouldCallAI) {
     console.log(`[HYBRID_ENGINE]: Turn ${turnCount} - Using local heuristics (API Preserved)`);
-    return localResult as GameStep;
+    return {
+      ...localResult,
+      technicalQuestion: localResult.question, // In local mode, they are the same
+      question: localResult.question,
+    } as GameStep;
   }
 
   try {
@@ -56,24 +59,26 @@ export async function processGameStep(history: { question: string; answer: strin
     const systemInstruction = `
       You are the "AI IPL GURU". You handle the narrative layer of a player guessing game.
       
-      LOGIC_INPUT: ${JSON.stringify(localResult)}
+      TECHNICAL_INTENT: "${localResult.question}"
+      LOGIC_STATE: ${JSON.stringify(localResult)}
       
       CORE GUIDELINES:
       1. DO NOT change the technical candidates or confidence.
-      2. If isFinal is FALSE: Rewrite 'question' to be more mystical, guru-like, and engaging.
-      3. If isFinal is TRUE: Write a dramatic "Guru Revelation" guess (max 15 words).
-      4. Avoid repeating previous questions. Keep it fresh.
+      2. If isFinal is FALSE: Rewrite the provided 'TECHNICAL_INTENT' to be more mystical, guru-like, and engaging.
+      3. CRITICAL: DO NOT repeat or rephrase any ideas from the previous conversation history. 
+      4. Avoid semantic similarity. If the history already covers a topic, focus exclusively on the new 'TECHNICAL_INTENT'.
+      5. If isFinal is TRUE: Write a dramatic "Guru Revelation" guess (max 15 words).
       
       OUTPUT FORMAT (VALID JSON):
       {
-        "nextQuestion": "Guru-style question string",
+        "nextQuestion": "Unique guru-style question string",
         "guess": "Dramatic guess string (if final)",
         "explanation": "Brief reasoning"
       }
     `;
 
     const interactionHistory = history.length > 0 
-      ? history.map((h, i) => `${i + 1}. Q: ${h.question} | A: ${h.answer}`).join('\n')
+      ? history.map((h, i) => `${i + 1}. Intent: ${h.technicalQuestion} | Guru Asked: ${h.question} | User Answered: ${h.answer}`).join('\n')
       : "The pitch is fresh. No history yet.";
 
     const response = await ai.models.generateContent({
@@ -100,6 +105,7 @@ export async function processGameStep(history: { question: string; answer: strin
     
     return {
       ...localResult,
+      technicalQuestion: localResult.question,
       question: data.nextQuestion || localResult.question,
       guess: localResult.isFinal ? (data.guess || localResult.guess) : null,
     } as GameStep;
@@ -107,10 +113,10 @@ export async function processGameStep(history: { question: string; answer: strin
   } catch (error: any) {
     console.warn(`[AI_BYPASS]: Turn ${turnCount} - Quota/Network issue. Reverting to technical core.`, error?.message);
     
-    // Total Stability: If AI is down, the user moves through the game 
-    // seamlessly using the local heuristic output.
     return {
       ...localResult,
+      technicalQuestion: localResult.question,
+      question: localResult.question,
       error: error?.status === 429 ? "QUOTA_MANAGED" : "HEURISTIC_RECOVERY"
     } as GameStep;
   }

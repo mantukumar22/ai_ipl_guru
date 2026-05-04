@@ -1,16 +1,17 @@
 import { IPL_PLAYERS, ATTRIBUTE_QUESTIONS } from './playerDb';
 
-export function getHeuristicGameStep(history: { question: string; answer: string }[]) {
+export function getHeuristicGameStep(history: { technicalQuestion?: string; question: string; answer: string }[]) {
   let candidates = [...IPL_PLAYERS];
 
   // 1. Filter candidates based on history
   for (const entry of history) {
-    const questionData = ATTRIBUTE_QUESTIONS.find(q => q.question === entry.question);
+    const technicalKey = entry.technicalQuestion || entry.question;
+    const questionData = ATTRIBUTE_QUESTIONS.find(q => q.question === technicalKey);
     if (!questionData) continue;
 
     const { key, value } = questionData;
-    const isYes = entry.answer === 'Yes';
-    const isNo = entry.answer === 'No';
+    const isYes = entry.answer === 'Yes' || entry.answer === 'PROBABLY';
+    const isNo = entry.answer === 'No' || entry.answer === 'PROBABLY NOT';
 
     if (isYes) {
       candidates = candidates.filter(p => String(p[key as keyof typeof p]) === String(value));
@@ -35,14 +36,30 @@ export function getHeuristicGameStep(history: { question: string; answer: string
   }
 
   // 4. Find the best next question (Information Gain / Splitting)
-  const usedQuestions = history.map(h => h.question);
-  let bestQuestion = ATTRIBUTE_QUESTIONS[0];
+  // We strictly avoid questions that technically overlap with what we already know.
+  const technicalHistory = history.map(h => h.technicalQuestion || h.question);
+
+  // Track which ATTRIBUTES (key-value pairs) have already been definitively explored
+  const exploredAttributes = new Set(technicalHistory.map(techQ => {
+    const q = ATTRIBUTE_QUESTIONS.find(aq => aq.question === techQ);
+    return q ? `${q.key}:${q.value}` : null;
+  }).filter(Boolean));
+
+  let bestQuestion = null;
   let minDiff = Infinity;
 
   for (const q of ATTRIBUTE_QUESTIONS) {
-    if (usedQuestions.includes(q.question)) continue;
+    // Skip if this technical question has already been asked
+    if (technicalHistory.includes(q.question)) continue;
+    
+    // Skip if we already explored this specific attribute value
+    if (exploredAttributes.has(`${q.key}:${q.value}`)) continue;
 
     const matchingCount = candidates.filter(p => String(p[q.key as keyof typeof p]) === String(q.value)).length;
+    
+    // If a question doesn't split the current pool at all (0 or all), it's useless
+    if (matchingCount === 0 || matchingCount === candidates.length) continue;
+
     const diff = Math.abs(matchingCount - (candidates.length / 2));
 
     if (diff < minDiff) {
@@ -50,6 +67,9 @@ export function getHeuristicGameStep(history: { question: string; answer: string
       bestQuestion = q;
     }
   }
+
+  // Fallback if no specific attribute question is discriminative enough
+  const finalQuestion = bestQuestion ? bestQuestion.question : "Is your player a high-profile IPL star?";
 
   return {
     isFinal: false,
@@ -59,6 +79,6 @@ export function getHeuristicGameStep(history: { question: string; answer: string
        name: p.name, 
        probability: Math.round((1 / (candidates.length || 1)) * 100) 
     })),
-    question: bestQuestion.question
+    question: finalQuestion
   };
 }

@@ -28,7 +28,8 @@ interface Suspect {
 
 export default function GameInterface() {
   const [status, setStatus] = useState<Status>('welcome');
-  const [history, setHistory] = useState<{ question: string; answer: string }[]>([]);
+  const [history, setHistory] = useState<{ technicalQuestion?: string; question: string; answer: string }[]>([]);
+  const [currentTechnicalQuestion, setCurrentTechnicalQuestion] = useState<string>('');
   const [currentQuestion, setCurrentQuestion] = useState<string>('');
   const [guess, setGuess] = useState<string | null>(null);
   const [confidence, setConfidence] = useState(0);
@@ -61,7 +62,7 @@ export default function GameInterface() {
       
       const firstStep = await processGameStep([]);
       
-      // Use fallback question if first step fails
+      setCurrentTechnicalQuestion(firstStep?.technicalQuestion || '');
       setCurrentQuestion(firstStep?.question || 'Is the player a specialist batsman?');
       setTopSuspects(Array.isArray(firstStep?.topSuspects) ? firstStep.topSuspects : []);
       setHistory([]);
@@ -79,7 +80,11 @@ export default function GameInterface() {
     if (loading || !sessionId) return;
     
     setGameError(null);
-    const newHistory = [...history, { question: currentQuestion, answer }];
+    const newHistory = [...history, { 
+      technicalQuestion: currentTechnicalQuestion, 
+      question: currentQuestion, 
+      answer 
+    }];
     setHistory(newHistory);
     setLoading(true);
     
@@ -112,6 +117,7 @@ export default function GameInterface() {
         setGuess(nextStep.guess);
         setStatus('guessing');
       } else {
+        setCurrentTechnicalQuestion(nextStep?.technicalQuestion || '');
         setCurrentQuestion(nextStep?.question || 'Is the player currently active in the IPL?');
       }
     } catch (err) {
