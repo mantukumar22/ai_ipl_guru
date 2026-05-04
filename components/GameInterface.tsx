@@ -97,7 +97,9 @@ export default function GameInterface() {
 
       const nextStep = await processGameStep(newHistory);
       
-      if (nextStep?.error === 'AI_STABILITY_TRIGGERED') {
+      if (nextStep?.error === 'QUOTA_EXCEEDED') {
+        setGameError("Intelligence quota reached. Switching to backup heuristics.");
+      } else if (nextStep?.error === 'AI_STABILITY_TRIGGERED') {
         setGameError("Neural link unstable - using heuristic estimation.");
       } else if (nextStep?.error) {
         setGameError("Engine anomaly detected. Recalibrating...");
