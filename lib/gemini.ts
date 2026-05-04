@@ -1,4 +1,5 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
+import { getHeuristicGameStep } from './gameEngine';
 
 let genAI: GoogleGenAI | null = null;
 
@@ -15,163 +16,102 @@ function getGenAI() {
 
 export interface GameStep {
   question?: string;
-  guess?: string;
+  guess?: string | null;
   confidence: number;
   isFinal: boolean;
   topSuspects: { name: string; probability: number }[];
   error?: string;
 }
 
-const cache = new Map<string, GameStep>();
-let lastRequestTime = 0;
-
+/**
+ * PROCESS_GAME_STEP (Hybrid Edition)
+ * Main entry point for game logic.
+ * Combines local heuristic filtering with surgical AI narrative injections.
+ */
 export async function processGameStep(history: { question: string; answer: string }[], retryCount = 0): Promise<GameStep> {
-  const modelName = "gemini-3-flash-preview"; 
+  // 1. Core Logic: Always calculate the technical state locally first.
+  // This ensures accuracy and zero-crashes even if the API is dead.
+  const localResult = getHeuristicGameStep(history);
   
-  // 1. Caching: Avoid redundant calls for the exact same state
-  const historyKey = JSON.stringify(history);
-  if (cache.has(historyKey)) {
-    console.log("[CACHE_HIT]: Reusing previous deduction step.");
-    return cache.get(historyKey)!;
-  }
+  // 2. Intelligence Strategy: Decide if this turn warrants a precious AI call.
+  // We only call the AI for the Start, Mid-pivot, and the Final guess.
+  const turnCount = history.length;
+  const isStart = turnCount === 0;
+  const isMidWay = turnCount === 6;
+  const isFinal = localResult.isFinal;
+  
+  const shouldCallAI = isStart || isMidWay || isFinal;
 
-  // 2. Throttling: Prevent rapid-fire requests (must be at least 1s apart)
-  const now = Date.now();
-  if (now - lastRequestTime < 1000 && retryCount === 0) {
-    console.warn("[THROTTLE]: Request too frequent, introducing delay.");
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-
-  const staticFallbacks = [
-    "Is the player currently playing for an IPL franchise?",
-    "Has the player ever won an IPL trophy?",
-    "Is the player a specialist bowler?",
-    "Has the player represented India in International cricket?",
-    "Is the player known for explosive power-hitting?"
-  ];
-
-  if (!history) {
-    history = [];
-  }
-
-  // 3. Request Capping: If game history is excessive (>15), force a fallback or final guess
-  if (history.length > 20) {
-     return {
-        question: "I've asked too many questions! Is it Virat Kohli?",
-        confidence: 50,
-        isFinal: true,
-        guess: "Virat Kohli",
-        topSuspects: [{ name: "Virat Kohli", probability: 50 }]
-     };
+  if (!shouldCallAI) {
+    console.log(`[HYBRID_ENGINE]: Turn ${turnCount} - Using local heuristics (API Preserved)`);
+    return localResult as GameStep;
   }
 
   try {
-    lastRequestTime = Date.now();
     const ai = getGenAI();
+    const modelName = "gemini-3-flash-preview";
     
+    console.log(`[AI_REQUEST]: Turn ${turnCount} - Fetching narrative intelligence...`);
+
     const systemInstruction = `
-      You are the "AI IPL GURU", a master deduction engine specializing in IPL players (2008-Present).
+      You are the "AI IPL GURU". You handle the narrative layer of a player guessing game.
       
-      CORE TASK:
-      Deduce the player using the history. 
+      LOGIC_INPUT: ${JSON.stringify(localResult)}
       
-      RULES:
-      1. ENTROPY: Select questions that eliminate the most candidates.
-      2. CANDIDATES: Always return exactly 5 candidates.
-      3. TERMINATION: Set 'isFinal' true only if confidence > 0.85 or count is 12.
+      CORE GUIDELINES:
+      1. DO NOT change the technical candidates or confidence.
+      2. If isFinal is FALSE: Rewrite 'question' to be more mystical, guru-like, and engaging.
+      3. If isFinal is TRUE: Write a dramatic "Guru Revelation" guess (max 15 words).
+      4. Avoid repeating previous questions. Keep it fresh.
       
-      OUTPUT FORMAT (JSON):
+      OUTPUT FORMAT (VALID JSON):
       {
-        "nextQuestion": "The next question",
-        "guess": "Full Player Name",
-        "confidence": float (0.0 to 1.0),
-        "isFinal": boolean,
-        "topSuspects": [{"name": "Name", "probability": float (0.0 to 1.0)}],
-        "reasoning": "Quick reason"
+        "nextQuestion": "Guru-style question string",
+        "guess": "Dramatic guess string (if final)",
+        "explanation": "Brief reasoning"
       }
     `;
 
     const interactionHistory = history.length > 0 
       ? history.map((h, i) => `${i + 1}. Q: ${h.question} | A: ${h.answer}`).join('\n')
-      : "No history yet.";
-
-    const prompt = `HISTORY:\n${interactionHistory}\n\nTASK: Generate the next deduction step JSON.`;
+      : "The pitch is fresh. No history yet.";
 
     const response = await ai.models.generateContent({
       model: modelName,
-      contents: prompt,
+      contents: `CONTEXT:\n${interactionHistory}\n\nTOP CANDIDATES: ${localResult.topSuspects.map(s => s.name).join(', ')}`,
       config: {
         systemInstruction,
         responseMimeType: "application/json",
-        temperature: 0.1,
+        temperature: 0.3,
       }
     });
 
     const rawText = response.text;
-    if (!rawText) throw new Error("Empty response from Gemini");
+    if (!rawText) throw new Error("Empty AI response");
 
     let data;
     try {
       data = JSON.parse(rawText);
     } catch (e) {
-      console.error("[JSON_PARSE_ERROR]:", rawText);
+      // Fallback extraction if AI adds markdown
       const match = rawText.match(/\{[\s\S]*\}/);
-      if (match) {
-        data = JSON.parse(match[0]);
-      } else {
-        throw new Error("Could not find valid JSON in AI response");
-      }
-    }
-    
-    const suspects = Array.isArray(data?.topSuspects) ? data.topSuspects : [];
-    const normalizedSuspects = suspects.slice(0, 5).map((s: any) => ({
-      name: String(s?.name || "Unknown Player"),
-      probability: Math.min(Math.max((Number(s?.probability) || 0) * 100, 0), 100)
-    }));
-
-    if (normalizedSuspects.length === 0 && data?.guess) {
-      normalizedSuspects.push({ name: String(data.guess), probability: 90 });
-    }
-
-    const confidenceVal = Math.min(Math.max((Number(data?.confidence) || 0) * 100, 0), 100);
-    const finalFlag = !!data?.isFinal || history.length >= 12;
-    
-    let guess = data?.guess;
-    if (finalFlag && !guess && normalizedSuspects.length > 0) {
-      guess = normalizedSuspects[0].name;
-    }
-
-    const result: GameStep = {
-      question: data?.nextQuestion || staticFallbacks[history.length % staticFallbacks.length],
-      guess: guess || null,
-      confidence: confidenceVal,
-      isFinal: finalFlag,
-      topSuspects: normalizedSuspects
-    };
-
-    // Store in cache
-    cache.set(historyKey, result);
-    return result;
-
-  } catch (error: any) {
-    console.error(`[AI_FAILURE] Attempt ${retryCount + 1}:`, error);
-
-    const isRateLimit = error?.message?.includes('429') || error?.status === 429;
-    
-    if (retryCount < 2) {
-      // Exponential backoff: 1s, 2s, 4s...
-      const waitTime = Math.pow(2, retryCount) * 1000;
-      console.warn(`[RETRYING] in ${waitTime}ms due to ${isRateLimit ? 'Rate Limit' : 'Error'}`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      return processGameStep(history, retryCount + 1);
+      data = match ? JSON.parse(match[0]) : {};
     }
     
     return {
-      question: staticFallbacks[history.length % staticFallbacks.length],
-      confidence: 5,
-      isFinal: false,
-      topSuspects: history.length > 5 ? [{ name: "MS Dhoni", probability: 10 }] : [],
-      error: isRateLimit ? "QUOTA_EXCEEDED" : "AI_STABILITY_TRIGGERED"
-    };
+      ...localResult,
+      question: data.nextQuestion || localResult.question,
+      guess: localResult.isFinal ? (data.guess || localResult.guess) : null,
+    } as GameStep;
+
+  } catch (error: any) {
+    console.warn(`[AI_BYPASS]: Turn ${turnCount} - Quota/Network issue. Reverting to technical core.`, error?.message);
+    
+    // Total Stability: If AI is down, the user moves through the game 
+    // seamlessly using the local heuristic output.
+    return {
+      ...localResult,
+      error: error?.status === 429 ? "QUOTA_MANAGED" : "HEURISTIC_RECOVERY"
+    } as GameStep;
   }
 }
